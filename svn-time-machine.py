@@ -82,147 +82,151 @@ def checkoutTimeMachine(url, path, maxRevision, *, action, useRootRevisionAsMax=
 # Deep tag of url to another url path with a revision <= maxRevision
 # See checkoutTimeMachine for a description of parameters
 def tagTimeMachine(source, destination, maxRevision, *, message=None, useRootRevisionAsMax=True, enableImports=False):
-  temporaryDir=os.path.normpath(os.path.abspath("temp"))
-  copies=[]
-  repository=svn.getRepositoryRoot(source)
-  if not destination.startswith(repository+"/"):
-    sys.stderr.write("ERROR! Destination '{destination}' must be in same repository as source '{source}'")
-    sys.exit(1)
-  commitData=svn.getCommit(repository, maxRevision)
-  rootCommitData=svn.getCommitBefore(source, maxRevision)
-  if useRootRevisionAsMax:
-    internalRevision=rootCommitData.revision
-    externalDate=rootCommitData.date
-  else:
-    if commitData.revision!=rootCommitData.revision:
-      sys.stdout.write(f"WARNING!\n")
-      sys.stdout.write(f"  Checkout '{source}' has revision {rootCommitData.revision}.\n")
-      sys.stdout.write(f"  Checkout of externals may have a revision up to {commitData.revision}.\n")
-    if maxRevision.startswith("{"):
-      internalRevision=commitData.revision
-      externalDate=maxRevision[1:-1]
+  #temporaryDir=os.path.normpath(os.path.abspath("temp"))
+  with tempfile.TemporaryDirectory() as temporaryDir:
+  #if True:
+    copies=[]
+    repository=svn.getRepositoryRoot(source)
+    if not destination.startswith(repository+"/"):
+      sys.stderr.write("ERROR! Destination '{destination}' must be in same repository as source '{source}'")
+      sys.exit(1)
+    commitData=svn.getCommit(repository, maxRevision)
+    rootCommitData=svn.getCommitBefore(source, maxRevision)
+    if useRootRevisionAsMax:
+      internalRevision=rootCommitData.revision
+      externalDate=rootCommitData.date
     else:
-      internalRevision=commitData.revision
-      externalDate=commitData.date
-  if message is None:
-    message=f"Tag of revision {maxRevision}"
-  curTemp=0
-  def newTemporaryDir():
-    nonlocal curTemp
-    while True:
-      try:
-        ret=os.path.join(temporaryDir, f"{curTemp}")
-        curTemp=curTemp+1
-        os.mkdir(ret)
-        return ret
-      except FileExistsError:
-        pass
-  def isInternalUrl(url):
-    return url.startswith(repository+"/")
-  
-  # Function to filter out complex externals (the ones that have external themselves)
-  # dest is the root of the directory we are handling
-  # messageList is a list of messages that will be used for the commit
-  def filterOutComplex(dest: str, messageList: str):
-    def ret(e: svn.ExternalFullInfo):
-      # Also converts relative urls to full urls if we are referring to something outside repository
-      if svn.getExternals(e.fullUrl, revision=e.revision):
-        deltaPath=[]
-        base=e.fullPath
-        while base!=dest:
-          base, name=os.path.split(base)
-          deltaPath.insert(0,name)
-        destUrl=destination
-        for n in deltaPath:
-          if not destUrl.endswith("/"):
-            destUrl=destUrl+"/"
-          destUrl=destUrl+urllib.parse.quote(n)
-        if isInternalUrl(e.fullUrl):
-          nextSteps.append((e.fullUrl, e.url, destUrl))
-        else:
-          handleExternalCheckout(e, dest, messageList)
+      if commitData.revision!=rootCommitData.revision:
+        sys.stdout.write(f"WARNING!\n")
+        sys.stdout.write(f"  Checkout '{source}' has revision {rootCommitData.revision}.\n")
+        sys.stdout.write(f"  Checkout of externals may have a revision up to {commitData.revision}.\n")
+      if maxRevision.startswith("{"):
+        internalRevision=commitData.revision
+        externalDate=maxRevision[1:-1]
       else:
-        url=e.url if isInternalUrl(e.fullUrl) else e.fullUrl
-        return svn.ExternalInfo(e.name, url, e.revision)
-    return ret
-  # d is a DirWithExternal that must be handled
-  def handleDirWithExternals(d, dest, messageList):
-    newVersions=d.map(svn.mapExternalBefore(repository, internalRevision, externalDate))
-    newVersions=newVersions.map(filterOutComplex(dest, messageList))
-    svn.setExternals(newVersions)
+        internalRevision=commitData.revision
+        externalDate=commitData.date
+    if message is None:
+      message=f"Tag of revision {maxRevision}"
+    curTemp=0
+    def newTemporaryDir():
+      nonlocal curTemp
+      while True:
+        try:
+          ret=os.path.join(temporaryDir, f"{curTemp}")
+          curTemp=curTemp+1
+          os.mkdir(ret)
+          return ret
+        except FileExistsError:
+          pass
+    def isInternalUrl(url):
+      return url.startswith(repository+"/")
     
-  def handleExternalCheckout(entry, dest, messageList):
-    if not enableImports:
-      sys.stdout.write(f"\n\nERROR!\nContent of external '{entry.fullUrl}' must be copied inside tag to perform the tag.\nUse --enable-imports to allow it or make a shallow copy.\n")
-      sys.exit(0)
+    # Function to filter out complex externals (the ones that have external themselves)
+    # dest is the root of the directory we are handling
+    # messageList is a list of messages that will be used for the commit
+    def filterOutComplex(dest: str, messageList: str):
+      def ret(e: svn.ExternalFullInfo):
+        # Also converts relative urls to full urls if we are referring to something outside repository
+        if svn.getExternals(e.fullUrl, revision=e.revision):
+          deltaPath=[]
+          base=e.fullPath
+          while base!=dest:
+            base, name=os.path.split(base)
+            deltaPath.insert(0,name)
+          destUrl=destination
+          for n in deltaPath:
+            if not destUrl.endswith("/"):
+              destUrl=destUrl+"/"
+            destUrl=destUrl+urllib.parse.quote(n)
+          if isInternalUrl(e.fullUrl):
+            nextSteps.append((e.fullUrl, e.url, destUrl))
+          else:
+            handleExternalCheckout(e, dest, messageList)
+        else:
+          url=e.url if isInternalUrl(e.fullUrl) else e.fullUrl
+          return svn.ExternalInfo(e.name, url, e.revision)
+      return ret
+    # d is a DirWithExternal that must be handled
+    def handleDirWithExternals(d, dest, messageList):
+      newVersions=d.map(svn.mapExternalBefore(repository, internalRevision, externalDate))
+      newVersions=newVersions.map(filterOutComplex(dest, messageList))
+      svn.setExternals(newVersions)
       
-    def getLocalPath(url):
-      relativePath=svn.getRelativePath(entry.fullUrl, url).split("/")
-      return os.path.join(entry.fullPath, *map(lambda x: urllib.parse.unquote(x), relativePath))
-    messageList.append(f"- Import of {entry.fullUrl}@{entry.revision}")
-    sys.stdout.write(f"  IMPORT: {entry.fullUrl}@{entry.revision}\n")
-    sys.stdout.write(f"    INTO: {entry.fullPath}\n")
-    svn.export(entry.fullPath, entry.fullUrl, revision=entry.revision, ignoreExternal=True)
-    svn.add(entry.fullPath)
-    
-    for d in svn.getExternals(entry.fullUrl, revision=entry.revision).listDirs():
-      newDir=svn.DirWithExternals(getLocalPath(d.basePath), d.repository)
-      for e in d.listFull():
-        newDir.add(e.name, e.url, e.revision)
-      handleDirWithExternals(newDir, dest, messageList)
-  def handleInternalCheckout(url: str, showedUrl: str|None, destUrl: str):
-    messageList=[message if showedUrl is None else message+f"\n- Tag of external {destUrl}"]
-    dest=newTemporaryDir()
-    isInternal=isInternalUrl(url)
-    curRevision=svn.getCommitBefore(url, internalRevision if isInternal else "{%s}"%(externalDate,))
-    if showedUrl is not None:
-      sys.stdout.write(f"  EXTERNAL: {showedUrl}@{curRevision.revision}\n")
-      sys.stdout.write(f"    DESTINATION: {destUrl}\n")
-    else:
-      sys.stdout.write(f"+-%s--+\n"%("-"*max(40,len(url)),))
-      sys.stdout.write(f"| TIME MACHINE TAG OF:\n")
-      sys.stdout.write(f"|  {url}\n")
-      sys.stdout.write(f"+-%s--+\n"%("-"*max(40,len(url)),))
-      sys.stdout.write(f"  COMMIT: {curRevision.revision} [{svn.localTimeString(curRevision.date)}]\n")
-      sys.stdout.write(f"  AUTHOR: {curRevision.author}\n")
-      sys.stdout.write(f"  MESSAGE:\n")
-      sys.stdout.write("    "+curRevision.message.replace("\n","\n    ")+"\n")
-      sys.stdout.write(f"  DESTINATION: {destUrl}\n")
-
-    svn.checkout(dest, url, revision=internalRevision if isInternal else "{%s}"%(externalDate,), ignoreExternal=True)
-    externals=svn.getExternals(dest)
-    for d in externals.listDirs():
-      handleDirWithExternals(d, dest, messageList)
-    #curMessage=
-    curMessage='\n'.join(messageList)
-    #print(f"Copy {dest}->{destUrl}\n'{curMessage}'")
-    copies.append((dest, destUrl, curMessage))
-  # url, showed url, destination url
-  nextSteps=[(source, None, destination)]
-  while nextSteps:
-    (url, showedUrl, destUrl)=nextSteps.pop()
-    handleInternalCheckout(url, showedUrl, destUrl)
-  sys.stdout.write(f"  PERFORMING COPY\n")
-  for (dest, destUrl, curMessage) in copies:
-    svn.copy(dest, destUrl, message=curMessage)
-
-#svn.copy(
+    def handleExternalCheckout(entry, dest, messageList):
+      if not enableImports:
+        sys.stdout.write(f"\n\nERROR!\nContent of external '{entry.fullUrl}' must be copied inside tag to perform the tag.\nUse --enable-imports to allow it or make a shallow copy.\n")
+        sys.exit(0)
+        
+      def getLocalPath(url):
+        relativePath=svn.getRelativePath(entry.fullUrl, url).split("/")
+        return os.path.join(entry.fullPath, *map(lambda x: urllib.parse.unquote(x), relativePath))
+      messageList.append(f"- Import of {entry.fullUrl}@{entry.revision}")
+      sys.stdout.write(f"  IMPORT: {entry.fullUrl}@{entry.revision}\n")
+      sys.stdout.write(f"    INTO: {entry.fullPath}\n")
+      svn.export(entry.fullPath, entry.fullUrl, revision=entry.revision, ignoreExternal=True)
+      svn.add(entry.fullPath)
+      
+      for d in svn.getExternals(entry.fullUrl, revision=entry.revision).listDirs():
+        newDir=svn.DirWithExternals(getLocalPath(d.basePath), d.repository)
+        for e in d.listFull():
+          newDir.add(e.name, e.url, e.revision)
+        handleDirWithExternals(newDir, dest, messageList)
+    def handleInternalCheckout(url: str, showedUrl: str|None, destUrl: str):
+      messageList=[message if showedUrl is None else message+f"\n- Tag of external {destUrl}"]
+      dest=newTemporaryDir()
+      isInternal=isInternalUrl(url)
+      curRevision=svn.getCommitBefore(url, internalRevision if isInternal else "{%s}"%(externalDate,))
+      if showedUrl is not None:
+        sys.stdout.write(f"  EXTERNAL: {showedUrl}@{curRevision.revision}\n")
+        sys.stdout.write(f"    DESTINATION: {destUrl}\n")
+      else:
+        sys.stdout.write(f"+-%s--+\n"%("-"*max(40,len(url)),))
+        sys.stdout.write(f"| TIME MACHINE TAG OF:\n")
+        sys.stdout.write(f"|  {url}\n")
+        sys.stdout.write(f"+-%s--+\n"%("-"*max(40,len(url)),))
+        sys.stdout.write(f"  COMMIT: {curRevision.revision} [{svn.localTimeString(curRevision.date)}]\n")
+        sys.stdout.write(f"  AUTHOR: {curRevision.author}\n")
+        sys.stdout.write(f"  MESSAGE:\n")
+        sys.stdout.write("    "+curRevision.message.replace("\n","\n    ")+"\n")
+        sys.stdout.write(f"  DESTINATION: {destUrl}\n")
+  
+      svn.checkout(dest, url, revision=internalRevision if isInternal else "{%s}"%(externalDate,), ignoreExternal=True)
+      externals=svn.getExternals(dest)
+      for d in externals.listDirs():
+        handleDirWithExternals(d, dest, messageList)
+      #curMessage=
+      curMessage='\n'.join(messageList)
+      #print(f"Copy {dest}->{destUrl}\n'{curMessage}'")
+      copies.append((dest, destUrl, curMessage))
+    # url, showed url, destination url
+    nextSteps=[(source, None, destination)]
+    while nextSteps:
+      (url, showedUrl, destUrl)=nextSteps.pop()
+      handleInternalCheckout(url, showedUrl, destUrl)
+    sys.stdout.write(f"  PERFORMING COPY\n")
+    for (dest, destUrl, curMessage) in copies:
+      print(dest, destUrl, repr(message))
+      svn.copy(dest, destUrl, message=curMessage)
 
 parser = argparse.ArgumentParser(
                     prog=os.path.basename(sys.argv[0]),
-                    description='SVN utility to checkout or tag a repository as it was at a particular revision/timestamp (including the external that were used at that particular date or time).')
+                    formatter_class=argparse.RawDescriptionHelpFormatter,
+                    description="SVN utility to checkout or tag a repository as it was at a particular revision/timestamp (including the external that were used at that particular date or time).",
+                    epilog='Copyright 2024 [Marzocchi Alessandro]\nSource code available at https://github.com/hefsoftware/svn_utils\n\nLicensed under the Apache License, version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)')
 
 parser.add_argument('url', help="The url to checkout/tag")
 parser.add_argument('revision', help="The time instant to checkout/tag. Can be an integer revision number (e.g. 437) or a date/time as defined by SVN (e.g. {2006-02-17}, {2006-02-17T15:30}, ...). If an integer revision is given the externals fetched will be the ones at the date/time of that commit, otherwise the ones at the date/time specified.")
+parser.add_argument('--debug', default=False, action=argparse.BooleanOptionalAction, help="Prints the operations and commands performed")
 subparsers = parser.add_subparsers(dest='command')
 # Checkout
-parserCheckout=subparsers.add_parser('checkout', help="Checkout of a time-machined repository to a particular path")
+parserCheckout=subparsers.add_parser('checkout', help="Checkout of a repository with time machine.")
 parserCheckout.add_argument('path', help="The destination for the checkout")
-parserCheckout.add_argument('--use-root-revision', default=False, action=argparse.BooleanOptionalAction, help="If true all the externals will be with commit revisions/timestamps less or equal to the commit revision/timestamps of the root checkout directory (the one speciied with url)")
+parserCheckout.add_argument('--use-root-revision', default=False, action=argparse.BooleanOptionalAction, help="If true all the externals will be with commit revisions/timestamps less or equal to the commit revision/timestamps of the root checkout directory (the one speciied with url). Otherwise the reference revision will be the one specified with revision parameter.")
 # Tag
 parserDeepTag=subparsers.add_parser('tag', help="Tag of a time-machined repository. In case the externals contains more externals the operation will be split in multiple steps to ensure that even the sub-externals version is forced. In case the externals refers to another repository this may also mean that files from other repository will be actually imported inside the tag.")
 parserDeepTag.add_argument('destination', help="The url destination for the tag")
-parserDeepTag.add_argument('-r', '--use-root-revision', default=False, action=argparse.BooleanOptionalAction, help="If true all the externals will be with commit revisions/timestamps less or equal to the commit revision/timestamps of the root checkout directory (the one speciied with url)")
+parserDeepTag.add_argument('-r', '--use-root-revision', default=False, action=argparse.BooleanOptionalAction, help="If true all the externals will be with commit revisions/timestamps less or equal to the commit revision/timestamps of the root checkout directory (the one specified with url). Otherwise the reference revision will be the one specified with revision parameter.")
 parserDeepTag.add_argument('-i', '--enable-imports', default=False, action=argparse.BooleanOptionalAction, help="If true externals containing externals themselves will be imported into the commited tag to make sure the content is exactly the same at the given time.")
 parserDeepTag.add_argument('-m', '--message', default=None, help="The url destination for the tag")
 # Shallow tag
@@ -232,11 +236,16 @@ parserShallowTag.add_argument('-r', '--use-root-revision', default=False, action
 
 
 args = parser.parse_args()
+if args.debug:
+  svn.enableDebug=True
 if args.command=='tag':
   tagTimeMachine(args.url, args.destination, args.revision, useRootRevisionAsMax=args.use_root_revision, message=args.message, enableImports=args.enable_imports)
   #checkoutTimeMachine(args.url, temporaryDir, args.revision, useRootRevisionAsMax=args.use_root_revision, action="DEEP TAG")
-#if args.command=='checkout':
-#  checkoutTimeMachine(args.url, args.path, args.revision, useRootRevisionAsMax=args.use_root_revision, action="CHECKOUT")
+elif args.command=='checkout':
+  checkoutTimeMachine(args.url, args.path, args.revision, useRootRevisionAsMax=args.use_root_revision, action="CHECKOUT")
+else:
+  sys.write("Unsupported mode!\n")
+  sys.exit(0)
 #elif args.command=="tag":
 #  with tempfile.TemporaryDirectory() as temporaryDir:
 #    checkoutTimeMachine(args.url, temporaryDir, args.revision, useRootRevisionAsMax=args.use_root_revision, recurse=False, action="TAG")

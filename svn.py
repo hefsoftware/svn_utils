@@ -21,9 +21,12 @@ import urllib.parse
 import re
 import datetime
 import time
+import sys
 
+enableDebug=False
 def executeSvn(*commandLine):
-  #print(commandLine)
+  if enableDebug:
+    sys.stderr.write("*** RUNNING SVN COMMAND: %s\n\n"%(" ".join(commandLine),))
   cmdLine=["svn"]
   cmdLine.extend(commandLine)
   result=subprocess.run(cmdLine, stdout=subprocess.PIPE)
@@ -159,6 +162,11 @@ class ExternalTree:
     
 # Get information about the commit happened at a time <=reference
 def getCommitBefore(url: str, reference: str)->CommitInfo:
+  try:
+    # Tries to inject the version inside the url (so that we can handle cases were there was a directory change)
+    url=f"{url}@{int(reference)}"
+  except:
+    pass
   cmdLine=['log', url, '--xml', '-r', f'{reference}:0', '-l', '1']
   result=executeSvn(*cmdLine)
   entry = ET.fromstring(result).find('logentry')
@@ -257,6 +265,12 @@ def mapExternalBefore(rootRepository, internalRevision, externalDate):
 def checkout(path, url, *, revision: str|CommitInfo|None=None, ignoreExternal=False):
   if isinstance(revision, CommitInfo):
     revision=revision.revision
+  try:
+    # Tries to inject the version inside the url (so that we can handle cases were there was a directory change)
+    url=f"{url}@{int(revision)}"
+  except:
+    pass
+
   cmdLine=['checkout', url, path]
   if revision is not None:
     cmdLine.extend(('-r', f'{revision}'))
@@ -267,6 +281,11 @@ def checkout(path, url, *, revision: str|CommitInfo|None=None, ignoreExternal=Fa
 def export(path, url, *, revision: str|CommitInfo|None=None, ignoreExternal=False):
   if isinstance(revision, CommitInfo):
     revision=revision.revision
+  try:
+    # Tries to inject the version inside the url (so that we can handle cases were there was a directory change)
+    url=f"{url}@{int(revision)}"
+  except:
+    pass
   cmdLine=['export', url, path]
   if revision is not None:
     cmdLine.extend(('-r', f'{revision}'))
